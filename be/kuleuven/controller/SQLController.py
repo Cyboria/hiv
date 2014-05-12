@@ -6,13 +6,15 @@ Created on 27 Mar 2014
 #from be.kuleuven.controller import CSVController
 from be.kuleuven.model import SQLModel
 from be.kuleuven.model.SQLModel import Patient, Therapy, Test, Event, Sample
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, asc, distinct, update
+from sqlalchemy.sql.functions import coalesce
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import exists
 from sqlalchemy.exc import IntegrityError
 import glob
 import difflib
 import logging
+import re
 
 import time
 
@@ -296,84 +298,164 @@ class SQLController:
                     self.session.rollback()
             self.session.commit()
             
-    def insertSamples(self, locationSubtypedFiles, calledFromMain):
-        # print file
+    def insertSamples(self, fileName, locationSubtypedFiles, calledFromMain):   
         if(calledFromMain):
+            self.samples = dict()
+        
+            self.csvController.setFileName(fileName)
+            reader = self.csvController.getReader(False)
+            
+            for row in reader:
+                patientId = 0
+                
+                try:
+                    patientId = int(row[0])
+                except ValueError:
+                    self.logger.warn("ValueError in method insertSamples while converting patientID: " + row[0] + " is no int")
+    
+                sampleId = row[2]
+                sampleDate = row[1]
+                
+                if sampleDate != '':
+                    if len(str(sampleDate).split('-')) >= 2:
+                        firstElem = str(sampleDate).split('-')[0]
+                        if len(firstElem) > 2 and (sampleDate.startswith('10') or sampleDate.startswith('0')):
+                            sampleDate = "0000-00-00"
+                    else:
+                        sampleDate = "0000-00-00"
+                else:
+                    sampleDate = "0000-00-00"
+                
+                rawSeq = str(row[3]).upper()
+    
+                if patientId != 0:
+                    if sampleDate != "0000-00-00":
+                        sample = Sample(patientId, sampleId, sampleDate, None, rawSeq, None, None, None)
+                        self.samples[sampleId] = sample
+                    else:
+                        print "Sample with patientId: " + str(patientId) + ", sampleId: " + str(sampleId) + " and sampleDate: " + str(sampleDate) + " could not be inserted."
+                else:
+                    print "Sample with patientId: " + str(patientId) + ", sampleId: " + str(sampleId) + " and sampleDate: " + str(sampleDate) + " could not be inserted."
+     
             self.csvController.setLocation(locationSubtypedFiles)
             csvFiles = glob.glob(locationSubtypedFiles + "*.csv")
             
             for i in csvFiles:
                 diff = difflib.ndiff(i, locationSubtypedFiles)
                 delta = ''.join(x[2:] for x in diff if x.startswith('- '))
-                self.insertSamples(delta, False)
-            return
+                self.insertSamples(fileName, delta, False)
         
-#        fileName = locationSubtypedFiles.split('.csv')
-        self.csvController.setFileName(locationSubtypedFiles)
-        reader = self.csvController.getReader(False)
-        
-        # row[0] = patientID_sequenceID_year
-        # row[1] = sequence length
-        # row[2] = subtype assignment
-        # row[4] = subtype support percentage
-        
-        for row in reader:
-            splitted_id = row[0].split("_")
-            patientId = 0
-            try:
-                patientId = int(splitted_id[0])
-            except ValueError:
-                self.logger.warn("ValueError in method fillSamples while converting patientID: " + splitted_id[0] + " is no int")
+        if not calledFromMain:
+            self.csvController.setFileName(locationSubtypedFiles)
+            reader = self.csvController.getReader(False)
             
-            arrayLength= len(splitted_id)
-            sampleId = ""
-            if(arrayLength > 3):
-                # print "ArrayLength: " + str(arrayLength)
-                sampleId = splitted_id[1]
-                for i in range(2,arrayLength - 1):
-                    # print "Item: " + str(i) + " Content: " + str(splitted_id[i])
-                    sampleId = sampleId + "_" + splitted_id[i]
-            else:
-                sampleId = splitted_id[1]
+            # row[0] = patientID_sequenceID_year
+            # row[1] = sequence length
+            # row[2] = subtype assignment
+            # row[4] = subtype support percentage
             
-            try:
-                sampleYear = splitted_id[arrayLength - 1]
-            except:
-                sampleYear = None
-            # print "Patient ID: " + splitted_id[0] + " Sequence: " + splitted_id[1] + " Year: " + splitted_id[2]
-        
-            subType = None
-            
-            # Only give them a subtype if it has a 100% support
-            
-            try:
-                if(row[4] != "" and int(float(row[4])) > 70):
-                    subType = row[2]
-                    subType = str(subType).replace("Subtype","")
-                    subType = subType.replace("  "," ")
-            except:
-                self.logger.warn(row[4] + " can't be converted into an int.")
-            
-            # TODO: These patients do not exists:
-            # Error on the following command: INSERT INTO samples (patientId, sampleId, sampleDate) VALUES (780065, BM78573, 2013)
-            # Error on the following command: INSERT INTO samples (patientId, sampleId, sampleDate) VALUES (785556, BM89391, 2014)
-            if patientId != 0:
-                sample = Sample(patientId, sampleId, sampleYear, subType, None, None, None, None)
+            for row in reader:
+                splitted_id = row[0].split("_")
+                patientId = 0
                 try:
-                    self.session.add(sample)
+                    patientId = int(splitted_id[0])
+                except ValueError:
+                    self.logger.warn("ValueError in method fillSamples while converting patientID: " + splitted_id[0] + " is no int")
+                
+                arrayLength= len(splitted_id)
+                sampleId = ""
+                if(arrayLength > 3):
+                    # print "ArrayLength: " + str(arrayLength)
+                    sampleId = splitted_id[1]
+                    for i in range(2,arrayLength - 1):
+                        # print "Item: " + str(i) + " Content: " + str(splitted_id[i])
+                        sampleId = sampleId + "_" + splitted_id[i]
+                else:
+                    sampleId = splitted_id[1]
+            
+                subType = None
+                
+                # Only give them a subtype if it has a 100% support
+                
+                try:
+                    if(row[4] != "" and int(float(row[4])) > 70):
+                        subType = row[2]
+                        subType = str(subType).replace("Subtype","")
+                        subType = subType.replace("  "," ")
+                except:
+                    self.logger.warn(row[4] + " can't be converted into an int.")
+                
+                if patientId != 0:
+                    if not sampleId == '' and sampleId in self.samples:
+                        self.samples[sampleId].subType = subType
+                # TODO: These patients do not exists:
+                # Error on the following command: INSERT INTO samples (patientId, sampleId, sampleDate) VALUES (780065, BM78573, 2013)
+                # Error on the following command: INSERT INTO samples (patientId, sampleId, sampleDate) VALUES (785556, BM89391, 2014)
+
+        if(calledFromMain):
+            for key, value in self.samples.iteritems():
+                try:
+                    self.session.add(value)
                     self.session.flush()
                 except IntegrityError as err:
-#                    print("Tried to add a duplicate entry for the Sample value "+str(sample.__repr__())+". Aborting")
+        #                    print("Tried to add a duplicate entry for the Sample value "+str(sample.__repr__())+". Aborting")
                     self.sampleSkippedCounter += 1
                     self.session.rollback()
-            self.session.commit()
-            
+            self.session.commit()      
+   
+    def insertAlignedSeq(self, fileController, treeController, multipleAlignmentFileLocation, multipleAlignmentFile):
+        #logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
+        fileController.setLocation(multipleAlignmentFileLocation)
+        fileController.setFileName(multipleAlignmentFile)
+        
+        align = fileController.getAlignmentFileHandler()
+        
+        for sequence in list(align):
+            if(not re.search("Ref",sequence.id)):
+                self.session.query(Sample).filter_by(patientId=str(treeController.leafNameToObjects(sequence.id)[0])).update({Sample.alignedSeq: str(sequence.seq)})
+                #self.session.execute(update(Sample).where(Sample.patientId == treeController.leafNameToObjects(sequence.id)[0]).values(editedSeq=str(sequence.seq)))
+                self.session.flush()
+        self.session.commit()
+   
+    def insertEditedSeq(self, fileController, treeController, multipleAlignmentFileLocation, multipleAlignmentFile):
+        #logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
+        fileController.setLocation(multipleAlignmentFileLocation)
+        fileController.setFileName(multipleAlignmentFile)
+        
+        align = fileController.getAlignmentFileHandler()
+        
+        for sequence in list(align):
+            if(not re.search("Ref",sequence.id)):
+                self.session.query(Sample).filter_by(patientId=str(treeController.leafNameToObjects(sequence.id)[0])).update({Sample.editedSeq: str(sequence.seq)})
+                #self.session.execute(update(Sample).where(Sample.patientId == treeController.leafNameToObjects(sequence.id)[0]).values(editedSeq=str(sequence.seq)))
+                self.session.flush()
+        self.session.commit()
+        
     def getSamplesSubtypeG(self):
         return self.session.query(Sample).filter(Sample.subType.like('HIV-1 G%')).all()
     
     def getPatientsHavingMultipleSamplesSubtypeG(self):
-        subquery = self.session.query(Sample.patientId, func.count(Sample.patientId)).group_by(Sample.patientId).having(func.count(Sample.patientId) > 1).filter(Sample.subType.like('HIV-1 G%')).subquery('subquery')
-        return self.session.query(func.concat(Sample.patientId, '_', Sample.sampleId, '_', Sample.sampleDate)).filter(and_(Sample.patientId == subquery.c.patientId,))
+#        subquery = self.session.query(Sample.patientId, func.count(Sample.patientId)).group_by(Sample.patientId).having(func.count(Sample.patientId) > 1).subquery('subquery')
+#        return self.session.query(func.concat(Sample.patientId, '_', Sample.sampleId, '_', Sample.sampleDate), Sample.patientId, Sample.sampleId, Sample.sampleDate).filter(Sample.subType.like('HIV-1 G%')).filter(and_(Sample.patientId == subquery.c.patientId,)).order_by(asc(Sample.patientId))
+        # func.concat(Sample.patientId, '_', Sample.sampleId, '_', Sample.sampleDate), Sample.patientId, Sample.sampleId, Sample.sampleDate, subquery.c.nrSamples
+        subquery = self.session.query(Sample.patientId, func.count(Sample.patientId).label('nrSamples')).filter(Sample.subType.like('HIV-1 G%')).group_by(Sample.patientId).having(func.count(Sample.patientId) > 1).subquery('subquery')
+        return self.session.query(Sample).filter(and_(Sample.patientId == subquery.c.patientId, Sample.subType.like('HIV-1 G%'))).order_by(asc(Sample.patientId))
+ 
+    def getPatientSampleCountHavingMultipleSamplesSubtypeG(self):
+        return self.session.query(Sample.patientId, func.count(Sample.patientId)).filter(Sample.subType.like('HIV-1 G%')).group_by(Sample.patientId).having(func.count(Sample.patientId) > 1)
     
-#    def getAllSamplesFromPatients(self,query):
-#        return self.session.query(func.concat(Sample.patientId, '_', Sample.sampleId, '_', Sample.sampleDate)).filter(and_(Sample.patientId == subquery.c.patientId,))
+    def getSpecific(self):
+        subquery = self.session.query(Sample.patientId).filter(Sample.subType.like('HIV-1 G%')).group_by(Sample.patientId).having(func.count(Sample.patientId) > 1).subquery('subquery')
+        return self.session.query(Sample.patientId, Sample.sampleId, Sample.sampleDate, Therapy.drugTypes != None, Test.testValue).join(Test, Sample.patientId == Test.patientId and Sample.sampleId == Test.sampleId).outerjoin(Therapy, Sample.patientId == Therapy.patientId).filter(and_(Sample.patientId == subquery.c.patientId,)).order_by(asc(Sample.patientId))
+   
+    def getAverageLoadPatient(self):
+        subquery = self.session.query(Sample.patientId).filter(Sample.subType.like('HIV-1 G%')).group_by(Sample.patientId).having(func.count(Sample.patientId) > 1).subquery('subquery')
+        return self.session.query(Sample.patientId, func.max(Test.testValue)).join(Test, Sample.patientId == Test.patientId and Sample.sampleId == Test.sampleId).filter(and_(Sample.patientId == subquery.c.patientId,)).group_by(Sample.patientId).order_by(asc(Sample.patientId))
+
+    # Therapy.drugTypes != None -> 1: Patient is treated, 0: Patient is not treated
+    def getPatientIdMaxViralLoadTreated(self):
+#        return self.session.query(Test.patientId, func.max(Test.testValue), (Therapy.drugTypes != None).label('Treated')).outerjoin(Therapy, Test.patientId == Therapy.patientId).group_by(Test.patientId)
+        return self.session.query(Sample.patientId, func.max(Test.testValue).label('maxViralLoad'), (Therapy.drugTypes != None).label('Treated')).outerjoin(Test, (Sample.patientId == Test.patientId) & (Test.testType == 'Viral_load')).outerjoin(Therapy, Sample.patientId == Therapy.patientId).filter(Sample.patientId.in_(self.session.query(Sample.patientId).filter(Sample.subType.like('HIV-1 G%')).group_by(Sample.patientId).having(func.count(Sample.patientId) > 1))).group_by(Sample.patientId)
+    
+    def isTreated(self, patientList):
+        return self.session.query(func.count(distinct(Therapy.patientId))).filter(Therapy.patientId.in_(patientList)).all()

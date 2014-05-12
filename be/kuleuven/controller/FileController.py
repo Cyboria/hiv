@@ -28,7 +28,10 @@ class FileController:
     
     def setFileName(self, fileName):
         self.fileModel.setFileName(fileName)
-        
+    
+    def getAlignmentFileHandler(self):
+        return self.fileModel.getAlignmentFileHandler()
+    
     def filterSubtypeGFromFastaFileToFastaFile(self, multipleAlignmentFileLocation, multipleAlignmentFile, outputFileLocation, outputFile):
         subtypeG = self.sqlController.getSamplesSubtypeG()
         subTypeGids = list()

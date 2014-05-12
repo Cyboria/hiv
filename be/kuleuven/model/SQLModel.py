@@ -9,7 +9,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-engine = create_engine('mysql+mysqldb://ewout:tux2012@localhost:3306/HIV_TEST', encoding='latin1')
+engine = create_engine('mysql+mysqldb://ewout:tux2012@localhost:3306/hiv_test', encoding='latin1')
+#engine = create_engine('mysql+mysqldb://meusebio:changeitnow@10.10.50.7:3306/hiv_test', encoding='latin1')
 Base = declarative_base()
 
 class Patient(Base):
@@ -55,7 +56,7 @@ class Sample(Base):
     
     patientId = Column(Integer, ForeignKey('patients.patientId', onupdate="CASCADE", ondelete="CASCADE"), primary_key=True)
     sampleId = Column(String(length=45), primary_key=True)
-    sampleDate = Column(String(length=4))
+    sampleDate = Column(Date)
     subType = Column(String(length=40))
     rawSeq = Column(Text)
     alignedSeq = Column(Text)
@@ -74,6 +75,12 @@ class Sample(Base):
     
     def __repr__(self):
         return "<Sample(patientId='%s', sampleId='%s', sampleDate='%s', subType='%s', rawSeq='%s', alignedSeq='%s', editedSeq='%s', protSeq='%s')>" % (self.patientId, self.sampleId, self.sampleDate, self.subType, self.rawSeq, self.alignedSeq, self.editedSeq, self.protSeq)
+    
+    def __eq__ (self, other):
+        return self.patientId == other.patientId and self.sampleId == other.sampleId
+
+    def __ne__ (self, other):
+        return not self.__eq__(other)
 
 class Test(Base):
     __tablename__ = 'tests'
